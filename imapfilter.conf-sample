@@ -1,13 +1,5 @@
-[general]
-imap_loglevel = 1
-loglevel = DEBUG
-
-[FHDO]
+[default]
 imap_hostname = my.imap.server.org
 imap_username = myusername
 imap_password = mypassword
 imap_mailbox = INBOX
-imap_polling_interval_s = 60
-imap_fullupdate_interval_s = 3600
-imap_restart_interval_s = 21600
-# 21600 = 6*3600

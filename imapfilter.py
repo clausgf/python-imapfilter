@@ -1,8 +1,8 @@
 """
 imapfilter.py
 
-Filter my Imap mailbox for spam
-Copyright (c) 2017 claufgf@googlemail.com. All rights reserved.
+Filter an IMAP mailbox for spam
+Copyright (c) 2017 clausgf@googlemail.com. All rights reserved.
 """
 
 import imapclient
@@ -12,6 +12,28 @@ import re
 import configparser
 import time
 from datetime import datetime
+
+
+loglevel = logging.DEBUG
+imapclient_loglevel = 1
+polling_interval_s = 60
+fullupdate_interval_s = 3600
+restart_interval_s = 6*3600
+
+
+def apply_rules(msgs, uid):
+
+    def move_by_header_field(header_field, search_regexp, to_folder):
+        msg = msgs.get(uid)
+        field_value = msg.get(header_field)
+        if re.search(search_regexp, field_value, re.IGNORECASE):
+            logging.info('Moving uid {} to {} ({} {} {})'.format(
+                uid, to_folder, msg.get('From'), msg.get('Subject'), msg.get('Date')))
+            msgs.copy([uid], to_folder)
+            msgs.delete([uid])
+
+    move_by_header_field('From', 'king@spam.com', 'Cabinet/Junk')
+    move_by_header_field('Subject', 'Internal job offer', 'Cabinet/Newsletter')
 
 
 class Messages:
@@ -63,28 +85,6 @@ class Messages:
         return result
 
 
-def apply_rules(msgs, uid):
-
-    def move_by_header_field(header_field, search_regexp, to_folder):
-        msg = msgs.get(uid)
-        field_value = msg.get(header_field)
-        if re.search(search_regexp, field_value, re.IGNORECASE):
-            logging.info('Moving uid {} to {} ({} {} {})'.format(
-                uid, to_folder, msg.get('From'), msg.get('Subject'), msg.get('Date')))
-            msgs.copy([uid], to_folder)
-            msgs.delete([uid])
-
-    move_by_header_field('From', 'Gesundheitsmanagement@fh-dortmund.de', 'Cabinet/15-Junk')
-    move_by_header_field('From', 'familienservice@fh-dortmund.de', 'Cabinet/15-Junk')
-    move_by_header_field('Subject', 'FH aktiv: ', 'Cabinet/15-Junk')
-    move_by_header_field('Subject', 'FH-Info: Stellenausschreibung', 'Cabinet/15-Junk')
-    move_by_header_field('Subject', 'FH-Info: Redaktionsschluss fh-presse', 'Cabinet/15-Junk')
-    move_by_header_field('From', 'raphael.weiland@hitex.de', 'Cabinet/13-Newsletter')
-    move_by_header_field('From', 'university@arm.com', 'Cabinet/13-Newsletter')
-    move_by_header_field('From', 'info@asqf.de', 'Cabinet/13-Newsletter')
-    #move_by_header_field('From', 'abcsdfsdfadsfadsf', 'Cabinet/12-Fachgesellschaften')
-
-
 def process_msgs(msgs):
     logging.info('*** Processing new msgs')
     new_uids = msgs.get_new_uids()
@@ -92,18 +92,15 @@ def process_msgs(msgs):
         apply_rules(msgs, uid)
 
 
-def main(config, configsection, imap_debuglevel):
-    imap_hostname = config.get(configsection, 'imap_hostname')
-    imap_username = config.get(configsection, 'imap_username')
-    imap_password = config.get(configsection, 'imap_password')
-    imap_mailbox = config.get(configsection, 'imap_mailbox')
-    imap_polling_interval_s = config.getint(configsection, 'imap_polling_interval_s')
-    imap_fullupdate_interval_s = config.getint(configsection, 'imap_fullupdate_interval_s')
-    imap_restart_interval_s = config.getint(configsection, 'imap_restart_interval_s')
+def main(config):
+    imap_hostname = config.get('default', 'imap_hostname')
+    imap_username = config.get('default', 'imap_username')
+    imap_password = config.get('default', 'imap_password')
+    imap_mailbox = config.get('default', 'imap_mailbox')
 
-    logging.info('Login {}@{} for mailbox {}'.format(imap_username, imap_hostname, imap_mailbox))
+    logging.info('Login {}@{} for {}'.format(imap_username, imap_hostname, imap_mailbox))
     client = imapclient.IMAPClient(imap_hostname, ssl=True, use_uid=True)
-    client.debug = imap_debuglevel
+    client.debug = imapclient_loglevel
     client.login(imap_username, imap_password)
     #client.capabilities()
     #client.list_folders()
@@ -115,40 +112,36 @@ def main(config, configsection, imap_debuglevel):
 
     start_fullupdate_interval = time.time()
     start_restart_interval = time.time()
-    while (time.time() - start_restart_interval) < imap_restart_interval_s:
+    while (time.time() - start_restart_interval) < restart_interval_s:
         logging.info('*** Checking for updates at {}'.format(str(datetime.now())))
         # Poll for changes
         response, updates = client.noop()
         logging.info('Got {}, updates={}'.format(response, updates))
         update_flag = False
         if len(updates) > 0:
-            #nums, updates = zip(updates)
-            #update_flag = 'RECENT' in updates
             update_flag = True
-        if (time.time() - start_fullupdate_interval) > imap_fullupdate_interval_s:
+        if (time.time() - start_fullupdate_interval) > fullupdate_interval_s:
             start_fullupdate_interval = time.time()
             msgs.clear()
             update_flag = True
         if update_flag:
             process_msgs(msgs)
             msgs.expunge()
-        time.sleep(imap_polling_interval_s)
+        time.sleep(polling_interval_s)
 
     logging.info('Logout {}@{} for mailbox {}'.format(imap_username, imap_hostname, imap_mailbox))
     client.logout()
 
 
+# main program
+logging.basicConfig(level=loglevel)
 config = configparser.ConfigParser()
 config.read('imapfilter.conf')
-numeric_loglevel = getattr(logging, config.get('general', 'loglevel').upper())
-logging.basicConfig(level=numeric_loglevel)
-imap_debuglevel = config.getint('general', 'imap_loglevel')
-print('Configuration sections: {}'.format(config.sections()))
 
 while True:
     try:
         logging.info('*** Restarting at {}'.format(str(datetime.now())))
-        main(config, 'FHDO', imap_debuglevel)
+        main(config)
     except Exception as e:
         logging.error(e)
     time.sleep(60)
